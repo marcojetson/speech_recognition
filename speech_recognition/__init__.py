@@ -22,7 +22,7 @@ import time
 import uuid
 
 __author__ = "Anthony Zhang (Uberi)"
-__version__ = "3.8.1"
+__version__ = "3.8.1.fossasia-1"
 __license__ = "BSD"
 
 try:  # attempt to use the Python 2 modules
@@ -842,6 +842,60 @@ class Recognizer(AudioSource):
         hypothesis = decoder.hyp()
         if hypothesis is not None: return hypothesis.hypstr
         raise UnknownValueError()  # no transcriptions available
+
+    def recognize_deepspeech(self, audio_data, language="en-US", keyword_entries=None, grammar=None, show_all=False):
+        """
+        Performs speech recognition on ``audio_data`` (an ``AudioData`` instance), using Mozilla's DeepSpeech.
+        """
+        assert isinstance(audio_data, AudioData), "``audio_data`` must be audio data"
+        assert isinstance(language, str) or (isinstance(language, tuple) and len(language) == 3), "``language`` must be a string or 3-tuple of Sphinx data file paths of the form ``(acoustic_parameters, language_model, phoneme_dictionary)``"
+        assert keyword_entries is None or all(isinstance(keyword, (type(""), type(u""))) and 0 <= sensitivity <= 1 for keyword, sensitivity in keyword_entries), "``keyword_entries`` must be ``None`` or a list of pairs of strings and numbers between 0 and 1"
+
+        # import the DeepSpeech speech recognition module
+        try:
+            from deepspeech import Model, printVersions
+            import numpy as np
+
+        except ImportError:
+            raise RequestError("missing DeepSpeech module: ensure that DeepSpeech is set up correctly.")
+        except ValueError:
+            raise RequestError("bad DeepSpeech installation; try reinstalling DeepSpeech version 0.6.0 or better.")
+
+        if isinstance(language, str):  # directory containing language data
+            language_directory = os.path.join(os.path.dirname(os.path.realpath(__file__)), "deepspeech-data", language)
+            if not os.path.isdir(language_directory):
+                raise RequestError("missing DeepSpeech language data directory: \"{}\"".format(language_directory))
+            prot_buffer_file = os.path.join(language_directory, "output_graph.pbmm")
+            language_model_file = os.path.join(language_directory, "lm.binary")
+            trie_file = os.path.join(language_directory, "trie")
+        if not os.path.isfile(prot_buffer_file):
+            raise RequestError("missing DeepSpeech model protocol buffer file: \"{}\"".format(prot_buffer_file))
+        if not os.path.isfile(language_model_file):
+            raise RequestError("missing DeepSpeech language model file: \"{}\"".format(language_model_file))
+        if not os.path.isfile(trie_file):
+            raise RequestError("missing DeepSpeech trie file: \"{}\"".format(trie_file))
+
+        # default values as used in above example file
+        beam_width = 500
+        lm_alpha = 0.75
+        lm_beta = 1.85
+
+        # create decoder object
+        ds = Model(prot_buffer_file, beam_width)
+        desired_sample_rate = ds.sampleRate()
+        # load language model data
+        ds.enableDecoderWithLM(language_model_file, trie_file, lm_alpha, lm_beta)
+
+        # obtain audio data
+        raw_data = audio_data.get_raw_data(convert_rate=desired_sample_rate, convert_width=2)  # the included language models require audio to be 16-bit mono 16 kHz in little-endian format
+
+        recognized_metadata = ds.sttWithMetadata(np.frombuffer(raw_data, np.int16))
+        recognized_string = ''.join(item.character for item in recognized_metadata.items)
+
+
+        if show_all: return recognized_metadata
+
+        return recognized_string
 
     def recognize_google(self, audio_data, key=None, language="en-US", pfilter=0, show_all=False):
         """
